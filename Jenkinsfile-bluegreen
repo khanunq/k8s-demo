@@ -89,7 +89,6 @@ pipeline {
           withEnv(["KUBECONFIG=${KCF}"]) {
             sh '''
               set -eux
-              # basic readiness: ensure at least one Ready pod for the IDLE color
               IDLE_SELECTOR=$([ "${START_ACTIVE}" = "blue" ] && echo "green" || echo "blue")
               $KUBECTL get pods -l app=demo-web,color=${IDLE_SELECTOR}
               $KUBECTL wait --for=condition=Ready pod -l app=demo-web,color=${IDLE_SELECTOR} --timeout=60s
@@ -105,10 +104,11 @@ pipeline {
           withEnv(["KUBECONFIG=${KCF}"]) {
             sh '''
               set -eux
-              TARGET=$([ "${START_ACTIVE}" = "blue" ] && echo "green" || echo "blue")
+              if [ "${START_ACTIVE}" = "blue" ]; then TARGET="green"; else TARGET="blue"; fi
 
-              # point the Service at the new color
-              $KUBECTL patch svc demo-web-svc -p "{\"spec\":{\"selector\":{\"app\":\"demo-web\",\"color\":\"${TARGET}\"}}}"
+              # ✅ Correct JSON quoting and explicit merge type
+              minikube kubectl -- patch svc demo-web-svc --type=merge \
+                -p '{"spec":{"selector":{"app":"demo-web","color":"'"$TARGET"'"}}}'
 
               # show where traffic goes now
               $KUBECTL get svc demo-web-svc -o jsonpath="{.spec.selector.color}"; echo
