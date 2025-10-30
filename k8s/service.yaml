@@ -5,6 +5,7 @@ metadata:
 spec:
   selector:
     app: demo-web
+    color: blue   # Jenkins flips this to green later
   ports:
     - port: 80
       targetPort: 8080

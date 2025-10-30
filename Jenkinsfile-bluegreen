@@ -1,0 +1,84 @@
+pipeline {
+  agent any
+  environment {
+    DOCKER_USER = 'zk0061'                  // change if needed
+    IMAGE      = "${DOCKER_USER}/demo-web"
+    REGISTRY   = "docker.io"
+    DOCKER_PASS = credentials('dockerhub-creds')
+    KCF         = credentials('kubeconfig')  // Secret file
+  }
+  parameters {
+    choice(name: 'START_ACTIVE', choices: ['blue','green'], description: 'Currently live color')
+  }
+  options { timestamps() }
+  stages {
+    stage('Checkout'){ steps { checkout scm } }
+    stage('Build & Tag'){
+      steps {
+        script { env.TAG = env.BUILD_NUMBER }
+        sh '''
+          set -eux
+          docker build -t ${REGISTRY}/${IMAGE}:${TAG} .
+          docker tag ${REGISTRY}/${IMAGE}:${TAG} ${REGISTRY}/${IMAGE}:latest
+        '''
+      }
+    }
+    stage('Push'){
+      steps {
+        sh '''
+          set -eux
+          echo "${DOCKER_PASS_PSW}" | docker login -u "${DOCKER_PASS_USR}" --password-stdin ${REGISTRY}
+          docker push ${REGISTRY}/${IMAGE}:${TAG}
+          docker push ${REGISTRY}/${IMAGE}:latest
+        '''
+      }
+    }
+    stage('Render Manifests'){
+      steps {
+        sh 'TAG=${TAG} DOCKER_USER=${DOCKER_USER} ./scripts/render.sh'
+      }
+    }
+    stage('Deploy to IDLE color'){
+      steps {
+        withEnv(["KUBECONFIG=${KCF}"]) {
+          script { env.IDLE = (params.START_ACTIVE == 'blue') ? 'green' : 'blue' }
+          sh '''
+            set -eux
+            if [ "${IDLE}" = "green" ]; then
+              kubectl apply -f /tmp/deploy-green.yaml
+              kubectl rollout status deploy/demo-web-green --timeout=90s
+            else
+              kubectl apply -f /tmp/deploy-blue.yaml
+              kubectl rollout status deploy/demo-web-blue --timeout=90s
+            fi
+          '''
+        }
+      }
+    }
+    stage('Health check (IDLE)'){
+      steps {
+        withEnv(["KUBECONFIG=${KCF}"]) {
+          sh '''
+            set -eux
+            kubectl get pods -l app=demo-web,color=${IDLE} -o jsonpath='{range .items[*]}{.metadata.name}{"="}{.status.containerStatuses[0].ready}{"\\n"}{end}' | grep '=true'
+          '''
+        }
+      }
+    }
+    stage('Switch traffic'){
+      steps {
+        withEnv(["KUBECONFIG=${KCF}"]) {
+          sh '''
+            set -eux
+            kubectl patch service demo-web-svc -p "{\"spec\":{\"selector\":{\"app\":\"demo-web\",\"color\":\"${IDLE}\"}}}"
+            kubectl get svc demo-web-svc -o jsonpath='{.spec.selector.color}'; echo
+          '''
+        }
+      }
+    }
+  }
+  post {
+    success { echo "✅ Live color is now ${env.IDLE}, image tag=${env.TAG}" }
+    failure { echo "❌ Failed before switch; traffic remains on ${params.START_ACTIVE}" }
+  }
+}
