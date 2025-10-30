@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% block content %}
+
+<div class="row align-items-center g-4">
+  <div class="col-12 col-lg-7">
+    <div class="p-4 rounded-3 hero">
+      <h1 class="display-6 mb-3">Hello from CI/CD on Kubernetes 🚀</h1>
+      <p class="lead mb-4">
+        This instance was deployed with a Blue/Green strategy using Jenkins.
+      </p>
+
+      <div class="d-flex flex-wrap gap-2 mb-3">
+        <span class="badge bg-dark-subtle text-dark border">Pod: {{ hostname }}</span>
+        <span class="badge bg-primary">Color: {{ color }}</span>
+        <span class="badge bg-success">Image Tag: {{ image_tag }}</span>
+      </div>
+
+      <div class="small text-muted">
+        <div>UTC: <code>{{ time_utc }}</code></div>
+        <div>Uptime: <code>{{ uptime_seconds }}s</code></div>
+        <div>Service: <code>{{ service_name }}</code></div>
+        <div>Registry: <code>{{ registry }}</code></div>
+        <div>Docker User: <code>{{ docker_user }}</code></div>
+      </div>
+
+      <div class="mt-4">
+        <a href="/api/info" class="btn btn-outline-secondary">View JSON /api/info</a>
+        <button id="refresh-btn" class="btn btn-primary ms-2">Refresh Info</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-12 col-lg-5">
+    <div class="card shadow-sm">
+      <div class="card-header">Live Info</div>
+      <div class="card-body">
+        <pre id="live-json" class="mb-0 small">Loading…</pre>
+      </div>
+    </div>
+  </div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+async function loadInfo() {
+  const el = document.getElementById('live-json');
+  try {
+    const res = await fetch('/api/info', { cache: 'no-store' });
+    const json = await res.json();
+    el.textContent = JSON.stringify(json, null, 2);
+  } catch (e) {
+    el.textContent = 'Failed to load /api/info: ' + (e?.message || e);
+  }
+}
+document.getElementById('refresh-btn').addEventListener('click', loadInfo);
+loadInfo();
+</script>
+{% endblock %}
