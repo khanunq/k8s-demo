@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>{{ title or "CI/CD on Kubernetes" }}</title>
+    <link
+      href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css"
+      rel="stylesheet"
+      integrity="sha384-QWTKZyjpPEjISv5WaRU9OFeRpok6YctnYmDr5pNlyT2bRjXh0JMhjY6hW+ALEwIH"
+      crossorigin="anonymous"
+    />
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
+  </head>
+  <body>
+    <nav class="navbar navbar-expand-lg bg-body-tertiary shadow-sm">
+      <div class="container">
+        <a class="navbar-brand fw-semibold" href="/">Demo Web</a>
+        <div class="ms-auto small text-muted">
+          Deployed via Jenkins → Docker → Kubernetes
+        </div>
+      </div>
+    </nav>
+
+    <main class="py-4">
+      <div class="container">
+        {% block content %}{% endblock %}
+      </div>
+    </main>
+
+    <footer class="border-top py-3 small text-center text-muted">
+      <div class="container">
+        &copy; {{ 2025 }} Demo | Healthy: <code>/healthz</code> | Ready: <code>/readyz</code>
+      </div>
+    </footer>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"
+            integrity="sha384-YvpcrYf0tY3lHB60NNkmXc5s9fDVZLESaAA55NDzOxhy9GkcIdslK1eN7N6jIeHz"
+            crossorigin="anonymous"></script>
+    {% block scripts %}{% endblock %}
+  </body>
+</html>
