@@ -1,84 +1,130 @@
 pipeline {
   agent any
-  environment {
-    DOCKER_USER = 'zk0061'                  // change if needed
-    IMAGE      = "${DOCKER_USER}/demo-web"
-    REGISTRY   = "docker.io"
-    DOCKER_PASS = credentials('dockerhub-creds')
-    KCF         = credentials('kubeconfig')  // Secret file
-  }
+
   parameters {
-    choice(name: 'START_ACTIVE', choices: ['blue','green'], description: 'Currently live color')
+    choice(name: 'START_ACTIVE', choices: ['blue', 'green'], description: 'Color currently serving traffic')
+    string(name: 'NEW_TAG', defaultValue: '${BUILD_NUMBER}', description: 'Image tag to deploy')
   }
-  options { timestamps() }
+
+  environment {
+    REGISTRY = 'docker.io'
+    DOCKER_USER = 'zk0061'
+    IMAGE = "${env.REGISTRY}/${env.DOCKER_USER}/demo-web"
+    // <<< KEY FIX: always use Minikube’s kubectl >>>
+    KUBECTL = 'minikube kubectl --'
+  }
+
   stages {
-    stage('Checkout'){ steps { checkout scm } }
-    stage('Build & Tag'){
+    stage('Checkout') {
       steps {
-        script { env.TAG = env.BUILD_NUMBER }
-        sh '''
-          set -eux
-          docker build -t ${REGISTRY}/${IMAGE}:${TAG} .
-          docker tag ${REGISTRY}/${IMAGE}:${TAG} ${REGISTRY}/${IMAGE}:latest
-        '''
+        checkout scm
       }
     }
-    stage('Push'){
+
+    stage('Build & Tag') {
       steps {
         sh '''
           set -eux
-          echo "${DOCKER_PASS_PSW}" | docker login -u "${DOCKER_PASS_USR}" --password-stdin ${REGISTRY}
-          docker push ${REGISTRY}/${IMAGE}:${TAG}
-          docker push ${REGISTRY}/${IMAGE}:latest
+          docker build -t ${IMAGE}:${NEW_TAG} .
+          docker tag ${IMAGE}:${NEW_TAG} ${IMAGE}:latest
         '''
       }
     }
-    stage('Render Manifests'){
+
+    stage('Push') {
       steps {
-        sh 'TAG=${TAG} DOCKER_USER=${DOCKER_USER} ./scripts/render.sh'
-      }
-    }
-    stage('Deploy to IDLE color'){
-      steps {
-        withEnv(["KUBECONFIG=${KCF}"]) {
-          script { env.IDLE = (params.START_ACTIVE == 'blue') ? 'green' : 'blue' }
+        withCredentials([usernamePassword(credentialsId: 'dockerhub-creds', usernameVariable: 'DU', passwordVariable: 'DP')]) {
           sh '''
             set -eux
-            if [ "${IDLE}" = "green" ]; then
-              kubectl apply -f /tmp/deploy-green.yaml
-              kubectl rollout status deploy/demo-web-green --timeout=90s
-            else
-              kubectl apply -f /tmp/deploy-blue.yaml
-              kubectl rollout status deploy/demo-web-blue --timeout=90s
-            fi
+            echo "$DP" | docker login -u "$DU" --password-stdin ${REGISTRY}
+            docker push ${IMAGE}:${NEW_TAG}
+            docker push ${IMAGE}:latest
           '''
         }
       }
     }
-    stage('Health check (IDLE)'){
+
+    stage('Render Manifests') {
       steps {
-        withEnv(["KUBECONFIG=${KCF}"]) {
-          sh '''
-            set -eux
-            kubectl get pods -l app=demo-web,color=${IDLE} -o jsonpath='{range .items[*]}{.metadata.name}{"="}{.status.containerStatuses[0].ready}{"\\n"}{end}' | grep '=true'
-          '''
+        sh '''
+          set -eux
+          TAG=${NEW_TAG} DOCKER_USER=${DOCKER_USER} ./scripts/render.sh
+        '''
+      }
+    }
+
+    stage('Deploy to IDLE color') {
+      steps {
+        withCredentials([file(credentialsId: 'kubeconfig', variable: 'KCF')]) {
+          withEnv(["KUBECONFIG=${KCF}"]) {
+            script {
+              def idle = (params.START_ACTIVE == 'blue') ? 'green' : 'blue'
+              echo "Active is ${params.START_ACTIVE}; deploying to IDLE=${idle}"
+
+              if (idle == 'green') {
+                sh '''
+                  set -eux
+                  $KUBECTL apply -f /tmp/deploy-green.yaml
+                  $KUBECTL apply -f /tmp/service.yaml
+                  $KUBECTL rollout status deploy/demo-web-green --timeout=120s
+                '''
+              } else {
+                sh '''
+                  set -eux
+                  $KUBECTL apply -f /tmp/deploy-blue.yaml
+                  $KUBECTL apply -f /tmp/service.yaml
+                  $KUBECTL rollout status deploy/demo-web-blue --timeout=120s
+                '''
+              }
+              currentBuild.description = "IDLE=${idle}, TAG=${params.NEW_TAG}"
+            }
+          }
         }
       }
     }
-    stage('Switch traffic'){
+
+    stage('Health check (IDLE)') {
       steps {
-        withEnv(["KUBECONFIG=${KCF}"]) {
-          sh '''
-            set -eux
-            kubectl patch service demo-web-svc -p "{\"spec\":{\"selector\":{\"app\":\"demo-web\",\"color\":\"${IDLE}\"}}}"
-            kubectl get svc demo-web-svc -o jsonpath='{.spec.selector.color}'; echo
-          '''
+        withCredentials([file(credentialsId: 'kubeconfig', variable: 'KCF')]) {
+          withEnv(["KUBECONFIG=${KCF}"]) {
+            sh '''
+              set -eux
+              # basic readiness: ensure at least one Ready pod for the IDLE color
+              IDLE_SELECTOR=$([ "${START_ACTIVE}" = "blue" ] && echo "green" || echo "blue")
+              $KUBECTL get pods -l app=demo-web,color=${IDLE_SELECTOR}
+              $KUBECTL wait --for=condition=Ready pod -l app=demo-web,color=${IDLE_SELECTOR} --timeout=60s
+            '''
+          }
+        }
+      }
+    }
+
+    stage('Switch traffic') {
+      steps {
+        withCredentials([file(credentialsId: 'kubeconfig', variable: 'KCF')]) {
+          withEnv(["KUBECONFIG=${KCF}"]) {
+            sh '''
+              set -eux
+              TARGET=$([ "${START_ACTIVE}" = "blue" ] && echo "green" || echo "blue")
+
+              # point the Service at the new color
+              $KUBECTL patch svc demo-web-svc -p "{\"spec\":{\"selector\":{\"app\":\"demo-web\",\"color\":\"${TARGET}\"}}}"
+
+              # show where traffic goes now
+              $KUBECTL get svc demo-web-svc -o jsonpath="{.spec.selector.color}"; echo
+            '''
+          }
         }
       }
     }
   }
+
   post {
-    success { echo "✅ Live color is now ${env.IDLE}, image tag=${env.TAG}" }
-    failure { echo "❌ Failed before switch; traffic remains on ${params.START_ACTIVE}" }
+    success {
+      echo "✅ Blue/Green switch complete. Now serving the IDLE color."
+    }
+    failure {
+      echo "❌ Failed before switch; traffic remains on START_ACTIVE=${params.START_ACTIVE}"
+    }
   }
 }
