@@ -3,15 +3,15 @@ pipeline {
 
   parameters {
     choice(name: 'START_ACTIVE', choices: ['blue', 'green'], description: 'Color currently serving traffic')
-    string(name: 'NEW_TAG', defaultValue: '${BUILD_NUMBER}', description: 'Image tag to deploy')
+    string(name: 'NEW_TAG', defaultValue: '${BUILD_NUMBER}', description: 'Image tag to build & deploy')
   }
 
   environment {
-    REGISTRY = 'docker.io'
+    REGISTRY    = 'docker.io'
     DOCKER_USER = 'zk0061'
-    IMAGE = "${env.REGISTRY}/${env.DOCKER_USER}/demo-web"
-    // <<< KEY FIX: always use Minikube’s kubectl >>>
-    KUBECTL = 'minikube kubectl --'
+    IMAGE       = "${env.REGISTRY}/${env.DOCKER_USER}/demo-web"
+    // Always use Minikube's kubectl so we talk to the right cluster
+    KUBECTL     = 'minikube kubectl --'
   }
 
   stages {
@@ -26,7 +26,7 @@ pipeline {
         sh '''
           set -eux
           docker build -t ${IMAGE}:${NEW_TAG} .
-          docker tag ${IMAGE}:${NEW_TAG} ${IMAGE}:latest
+          docker tag   ${IMAGE}:${NEW_TAG} ${IMAGE}:latest
         '''
       }
     }
@@ -61,22 +61,32 @@ pipeline {
               def idle = (params.START_ACTIVE == 'blue') ? 'green' : 'blue'
               echo "Active is ${params.START_ACTIVE}; deploying to IDLE=${idle}"
 
+              sh '''
+                set -eux
+                # Make sure Jenkins has a fresh API server URL/port
+                minikube update-context
+
+                # Create/ensure Service first (idempotent) — allow skipping validation
+                ${KUBECTL} apply -f /tmp/service.yaml --validate=false
+              '''
+
               if (idle == 'green') {
                 sh '''
                   set -eux
-                  $KUBECTL apply -f /tmp/deploy-green.yaml
-                  $KUBECTL apply -f /tmp/service.yaml
-                  $KUBECTL rollout status deploy/demo-web-green --timeout=120s
+                  ${KUBECTL} apply -f /tmp/deploy-green.yaml --validate=false
+                  ${KUBECTL} rollout status deploy/demo-web-green --timeout=180s
                 '''
               } else {
                 sh '''
                   set -eux
-                  $KUBECTL apply -f /tmp/deploy-blue.yaml
-                  $KUBECTL apply -f /tmp/service.yaml
-                  $KUBECTL rollout status deploy/demo-web-blue --timeout=120s
+                  ${KUBECTL} apply -f /tmp/deploy-blue.yaml --validate=false
+                  ${KUBECTL} rollout status deploy/demo-web-blue --timeout=180s
                 '''
               }
-              currentBuild.description = "IDLE=${idle}, TAG=${params.NEW_TAG}"
+
+              script {
+                currentBuild.description = "IDLE=${idle}, TAG=${params.NEW_TAG}"
+              }
             }
           }
         }
@@ -90,8 +100,8 @@ pipeline {
             sh '''
               set -eux
               IDLE_SELECTOR=$([ "${START_ACTIVE}" = "blue" ] && echo "green" || echo "blue")
-              $KUBECTL get pods -l app=demo-web,color=${IDLE_SELECTOR}
-              $KUBECTL wait --for=condition=Ready pod -l app=demo-web,color=${IDLE_SELECTOR} --timeout=60s
+              ${KUBECTL} get pods -l app=demo-web,color=${IDLE_SELECTOR}
+              ${KUBECTL} wait --for=condition=Ready pod -l app=demo-web,color=${IDLE_SELECTOR} --timeout=120s
             '''
           }
         }
@@ -106,12 +116,12 @@ pipeline {
               set -eux
               if [ "${START_ACTIVE}" = "blue" ]; then TARGET="green"; else TARGET="blue"; fi
 
-              # ✅ Correct JSON quoting and explicit merge type
+              # Update Service selector (correct JSON quoting + explicit merge)
               minikube kubectl -- patch svc demo-web-svc --type=merge \
                 -p '{"spec":{"selector":{"app":"demo-web","color":"'"$TARGET"'"}}}'
 
-              # show where traffic goes now
-              $KUBECTL get svc demo-web-svc -o jsonpath="{.spec.selector.color}"; echo
+              # Show where traffic goes now
+              ${KUBECTL} get svc demo-web-svc -o jsonpath="{.spec.selector.color}"; echo
             '''
           }
         }
@@ -121,7 +131,7 @@ pipeline {
 
   post {
     success {
-      echo "✅ Blue/Green switch complete. Now serving the IDLE color."
+      echo '✅ Blue/Green switch complete. Now serving the former IDLE color.'
     }
     failure {
       echo "❌ Failed before switch; traffic remains on START_ACTIVE=${params.START_ACTIVE}"
