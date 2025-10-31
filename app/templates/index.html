@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block content %}
+  <h1>{{ title }}</h1>
+  <p>🚀 CI/CD with Jenkins + Docker + Kubernetes</p>
+  <p>Version: <strong>{{ version }}</strong></p>
+  <button onclick="checkStatus()">Check API Status</button>
+  <pre id="status"></pre>
+  <script>
+    async function checkStatus(){
+      const r = await fetch('/api/status');
+      document.getElementById('status').innerText = JSON.stringify(await r.json(), null, 2);
+    }
+  </script>
+{% endblock %}

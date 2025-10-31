@@ -1,0 +1,14 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>{{ title or "App" }}</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <nav class="topbar">Demo Web</nav>
+  <main class="container">{% block content %}{% endblock %}</main>
+  <footer>© 2025 K8s CI/CD Demo</footer>
+</body>
+</html>
